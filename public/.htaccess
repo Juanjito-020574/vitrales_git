@@ -1,0 +1,19 @@
+# /public/.htaccess
+
+RewriteEngine On
+
+# Si la petición es para un archivo o directorio que existe, sírvelo directamente
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+
+# Para todas las demás peticiones, redirige a index.php (para la app SPA)
+# IMPORTANTE: Dejamos que las peticiones a api.php pasen directamente.
+# RewriteRule ^(?!api\.php) index.php [L,QSA]
+RewriteRule ^(?!api\.php|fix_passwords\.php) index.php [L,QSA]
+
+# php -- BEGIN cPanel-generated handler, do not edit
+# Set the “ea-php83” package as the default “PHP” programming language.
+<IfModule mime_module>
+  AddHandler application/x-httpd-ea-php83 .php .php8 .phtml
+</IfModule>
+# php -- END cPanel-generated handler, do not edit
