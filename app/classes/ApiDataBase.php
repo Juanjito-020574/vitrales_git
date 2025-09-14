@@ -6,6 +6,8 @@ declare(strict_types=1);
 class ApiDataBase {
 	private mysqli $connection;
 
+	//Esta es la función constructora para ApiDataBase
+	// Sigue
 	public function __construct(string $host, string $user, string $pass, string $name) {
 		// Reporta errores de MySQL como excepciones de PHP
 		mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
