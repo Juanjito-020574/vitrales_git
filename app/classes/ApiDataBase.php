@@ -6,6 +6,7 @@ declare(strict_types=1);
 class ApiDataBase {
 	private mysqli $connection;
 
+	private accion_my=null;
 	//Esta es la función constructora para ApiDataBase
 	// Sigue
 	public function __construct(string $host, string $user, string $pass, string $name) {
