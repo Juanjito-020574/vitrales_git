@@ -1,123 +1,124 @@
-// /public/js/api/client.js (Refactorizado para usar SchemaBuilder)
+// Indentación con TABS
+// public/js/api/client.js
 
-import { state } from '../app.js';
+const API_BASE_URL = 'api.php'; // URL base de nuestra API
 
-export async function apiFetch(endpoint, params = {}, options = {}) {
-	const queryString = new URLSearchParams(params).toString();
-	const url = `/api.php?endpoint=${endpoint}${queryString ? '&' + queryString : ''}`;
+/**
+ * Función central para realizar todas las peticiones a la API.
+ * Maneja la configuración de fetch, el cuerpo de la petición y los errores comunes.
+ * @param {string} action - El endpoint de la API a llamar.
+ * @param {object} params - Parámetros para la URL (ej. { table: 'clientes' }).
+ * @param {string} method - Método HTTP (GET, POST, PUT, DELETE).
+ * @param {object|null} body - El cuerpo de la petición para POST o PUT.
+ * @returns {Promise<any>} - La respuesta de la API en formato JSON.
+ */
+async function performRequest(action, params = {}, method = 'GET', body = null) {
+	const url = new URL(API_BASE_URL, window.location.origin);
+	url.searchParams.set('action', action);
+	for (const key in params) {
+		url.searchParams.set(key, params[key]);
+	}
 
-	if (options.body && !options.method) options.method = 'POST';
-	if (options.body && !options.headers) options.headers = { 'Content-Type': 'application/json' };
+	const options = {
+		method: method,
+		headers: {
+			'Content-Type': 'application/json',
+			'Accept': 'application/json',
+		},
+	};
 
-	const response = await fetch(url, options);
+	if (body) {
+		options.body = JSON.stringify(body);
+	}
 
-	if (response.status === 204) return null; // 204 No Content (para DELETE)
-
-	// Manejar errores de JSON inválido
-	const responseText = await response.text();
-	let data;
 	try {
-		data = JSON.parse(responseText);
-	} catch (e) {
-		console.error("Error al analizar JSON:", responseText);
-		throw new Error("La respuesta del servidor no es un JSON válido.");
-	}
+		const response = await fetch(url, options);
 
-	if (!response.ok) {
-		throw new Error(data.error || `Error ${response.status}`);
-	}
-	return data;
-}
-
-/**
- * ¡REFACTORIZADO!
- * Sincroniza los esquemas de la interfaz usando el nuevo endpoint 'schemas/hydrated'.
- * La lógica de actualización ahora es "todo o nada" para mayor simplicidad y robustez.
- */
-export async function syncSchemas() {
-	const localVersionsRaw = sessionStorage.getItem('schemaVersions');
-	const localSchemasRaw = localStorage.getItem('hydratedSchemas');
-	let localVersions = localVersionsRaw ? JSON.parse(localVersionsRaw) : null;
-
-	if (!localVersions || !localSchemasRaw) {
-		console.log("Caché de esquemas vacía. Realizando carga completa...");
-		const data = await apiFetch('schemas/hydrated');
-		localStorage.setItem('hydratedSchemas', JSON.stringify(data.schemas));
-		sessionStorage.setItem('schemaVersions', JSON.stringify(data.versions));
-		state.allSchemas = data.schemas;
-		return;
-	}
-
-	console.log("Verificando actualizaciones de esquemas...");
-	const serverVersions = await apiFetch('schema_versions');
-	let allSchemas = JSON.parse(localSchemasRaw);
-	let needsUpdate = false;
-
-	for (const tableName in serverVersions) {
-		if (localVersions[tableName] !== serverVersions[tableName]) {
-			needsUpdate = true;
-			break;
+		if (!response.ok) {
+			const errorData = await response.json().catch(() => ({ error: 'Error de red o respuesta no válida.' }));
+			throw new Error(errorData.error || `Error ${response.status}: ${response.statusText}`);
 		}
-	}
-	if (!needsUpdate && Object.keys(localVersions).length !== Object.keys(serverVersions).length) {
-		needsUpdate = true;
-	}
 
-	if (needsUpdate) {
-		console.log("Se detectaron cambios. Actualizando todos los esquemas...");
-		const data = await apiFetch('schemas/hydrated');
-		localStorage.setItem('hydratedSchemas', JSON.stringify(data.schemas));
-		sessionStorage.setItem('schemaVersions', JSON.stringify(data.versions));
-		state.allSchemas = data.schemas;
-	} else {
-		console.log("Caché de esquemas al día.");
-		state.allSchemas = allSchemas;
+		return await response.json();
+
+	} catch (error) {
+		console.error(`Error en la llamada a la API [${action}]:`, error);
+		// Relanzamos el error para que el llamador pueda manejarlo.
+		throw error;
 	}
 }
 
-/**
- * ¡REFACTORIZADO!
- * Obtiene un esquema ya procesado ("hidratado") de la caché.
- */
-export function getSchema(tableName) {
-	if (!state.allSchemas) {
-		const cached = localStorage.getItem('hydratedSchemas');
-		if (cached) {
-			state.allSchemas = JSON.parse(cached);
-		} else {
-			throw new Error("Los esquemas no han sido cargados.");
-		}
-	}
-	return state.allSchemas[tableName];
-}
+// Objeto que exporta todos los métodos de la API para ser usados en la aplicación.
+export const apiClient = {
 
+	// --- MÉTODOS DE ESQUEMA Y NAVEGACIÓN (NUEVA ARQUITECTURA) ---
 
-// --- FUNCIONES CRUD AUXILIARES (Mantenidas y Mejoradas) ---
+	/**
+	 * Descarga el esquema completo, hidratado y procesado de la aplicación.
+	 * Esta es la llamada principal al iniciar la aplicación.
+	 */
+	syncApplicationSchema: function() {
+		return performRequest('get_hydrated_schema');
+	},
 
-export function getData(tableName) {
-	return apiFetch(tableName);
-}
+	// --- MÉTODOS DE SESIÓN ---
 
-export function createRecord(tableName, data) {
-	return apiFetch(tableName, {}, {
-		method: 'POST',
-		body: JSON.stringify(data)
-	});
-}
+	login: function(credentials) {
+		return performRequest('login', {}, 'POST', credentials);
+	},
 
-export function updateRecord(tableName, recordId, data) {
-	return apiFetch(tableName, {}, {
-		method: 'PUT',
-		body: JSON.stringify({ ...data, id: recordId })
-	});
-}
+	logout: function() {
+		return performRequest('logout', {}, 'POST');
+	},
 
-export function deleteRecord(tableName, id) {
-	return apiFetch(tableName, { id: id }, {
-		method: 'DELETE'
-	});
-}
+	checkStatus: function() {
+		return performRequest('status');
+	},
 
-export function getRecordById(tableName, id) {
-	return apiFetch(tableName, { id: id });
-}
+	// --- MÉTODOS CRUD (LÓGICA PRESERVADA) ---
+
+	/**
+	 * Obtiene todos los registros de una tabla específica.
+	 * @param {string} tableName - El nombre de la tabla.
+	 */
+	getData: function(tableName) {
+		return performRequest('get_table_data', { table: tableName });
+	},
+
+	/**
+	 * Obtiene un único registro por su ID.
+	 * @param {string} tableName - El nombre de la tabla.
+	 * @param {number} id - El ID del registro.
+	 */
+	getRecordById: function(tableName, id) {
+		return performRequest('get_record_by_id', { table: tableName, id: id });
+	},
+
+	/**
+	 * Crea un nuevo registro en una tabla.
+	 * @param {string} tableName - El nombre de la tabla.
+	 * @param {object} data - Los datos del nuevo registro.
+	 */
+	createRecord: function(tableName, data) {
+		return performRequest('create_record', { table: tableName }, 'POST', data);
+	},
+
+	/**
+	 * Actualiza un registro existente.
+	 * @param {string} tableName - El nombre de la tabla.
+	 * @param {number} id - El ID del registro a actualizar.
+	 * @param {object} data - Los campos a actualizar.
+	 */
+	updateRecord: function(tableName, id, data) {
+		return performRequest('update_record', { table: tableName, id: id }, 'PUT', data); // Usamos PUT para actualizaciones
+	},
+
+	/**
+	 * Realiza un borrado lógico de un registro.
+	 * @param {string} tableName - El nombre de la tabla.
+	 * @param {number} id - El ID del registro a eliminar.
+	 */
+	deleteRecord: function(tableName, id) {
+		return performRequest('delete_record', { table: tableName, id: id }, 'DELETE'); // Usamos DELETE para borrados
+	},
+};

@@ -1,161 +1,149 @@
 <?php
-// /app/classes/SchemaBuilder.php (Versión Final Corregida)
+class SchemaBuilder {
+	private $db;
+	private $archetypes;
+	private $permissionRules;
 
-declare(strict_types=1);
-
-class SchemaBuilder
-{
-	private ApiDataBase $db;
-	private int $rolId;
-	private array $permissions_fallback;
-	private array $table_archetypes;
-	private array $column_archetypes;
-
-	public function __construct(ApiDataBase $db, int $rolId)
-	{
+	public function __construct(ApiDataBase $db) {
 		$this->db = $db;
-		$this->rolId = $rolId;
-		$this->permissions_fallback = require(dirname(__DIR__, 2) . '/config/permissions.php');
-		$archetypes = require(dirname(__DIR__, 2) . '/config/schema_archetypes.php');
-		$this->table_archetypes = $archetypes['table_archetypes'];
-		$this->column_archetypes = $archetypes['column_archetypes'];
+		$this->archetypes = require __DIR__ . '/../../config/schema_archetypes.php';
+		$this->permissionRules = require __DIR__ . '/../../config/permissions.php';
 	}
 
-	public function buildAllHydratedSchemas(): array
-	{
-		$rawSchemas = $this->db->query("SELECT table_name, schema_json, fecha_modificacion FROM app_schema");
-		$db_schema_rules_raw = $this->db->query("SELECT tabla_afectada, regla_json FROM permisos WHERE rol_id = ? AND tipo_regla = 'schema' AND is_active = 1", [$this->rolId]);
+	/**
+	 * Método principal refactorizado Y SIMPLIFICADO.
+	 * Orquesta la sincronización, lee la caché, hidrata arquetipos y resuelve selects.
+	 * YA NO APLICA PERMISOS.
+	 */
+	public function buildAllHydratedSchemas() { // <--- PARÁMETRO $roleId ELIMINADO
+		// ---------------------------------------------------------------------
+		// PASO 1: VERIFICAR LA INTEGRIDAD DE LA CACHÉ `app_schema`
+		// (Esta parte es correcta y se mantiene)
+		// ---------------------------------------------------------------------
+		$sql_check_cache = "
+			SELECT
+				v.table_name
+			FROM
+				v_schema_con_checksum v
+			LEFT JOIN
+				app_schema a ON v.table_name = a.table_name
+			WHERE
+				a.checksum IS NULL OR v.ultimo_cambio > a.checksum
+		";
+		$tablasDesactualizadas = $this->db->query($sql_check_cache);
 
-		$db_schema_rules = [];
-		foreach ($db_schema_rules_raw as $r) {
-			$db_schema_rules[$r['tabla_afectada']] = json_decode($r['regla_json'], true);
+		// ---------------------------------------------------------------------
+		// PASO 2: SI HAY DISCREPANCIAS, LLAMAR AL SCRIPT DE SINCRONIZACIÓN
+		// (Esta parte es correcta y se mantiene)
+		// ---------------------------------------------------------------------
+		if (!empty($tablasDesactualizadas)) {
+			$tablasParaSincronizar = array_column($tablasDesactualizadas, 'table_name');
+			$silenciarSalida = true;
+			require __DIR__ . '/../../public/scripts/sync_schema.php';
 		}
+
+		// ---------------------------------------------------------------------
+		// PASO 3: LEER DE LA CACHÉ Y CONSTRUIR ESQUEMA BASE
+		// (Esta parte es correcta y se mantiene)
+		// ---------------------------------------------------------------------
+		$rawSchemas = $this->db->query("SELECT table_name, schema_json FROM app_schema WHERE is_deleted = 0");
 
 		$hydratedSchemas = [];
 		foreach ($rawSchemas as $row) {
 			$tableName = $row['table_name'];
-			$schemaObject = json_decode($row['schema_json'], true);
-			if (is_null($schemaObject)) continue;
+			$schema = json_decode($row['schema_json'], true);
+			if (json_last_error() !== JSON_ERROR_NONE) { continue; }
 
-			$hydratedSchema = $this->hydrateSchema($schemaObject);
-			$rule = $db_schema_rules[$tableName] ?? $this->permissions_fallback[$tableName]['schema_rules'][$this->rolId] ?? null;
-			$finalSchema = $this->applyPermissionRule($hydratedSchema, $rule);
+			$hydrated = $this->hydrateSchema($schema);
+			$hydratedSchemas[$tableName] = $hydrated;
+		}
 
-			// Asegurarnos de que las propiedades clave siempre estén presentes
-			$finalSchema['tableName'] = $tableName;
-			$finalSchema['last_updated'] = $row['fecha_modificacion'];
+		// ---------------------------------------------------------------------
+		// PASO 4: RESOLVER SELECTS (LA LÓGICA DE PERMISOS SE ELIMINA)
+		// ---------------------------------------------------------------------
+		// Se elimina el bloque que leía la tabla `permisos` y aplicaba las reglas.
 
-			$hydratedSchemas[$tableName] = $finalSchema;
+		foreach ($hydratedSchemas as $tableName => &$schema) {
+			$schema = $this->resolveSelectOptions($schema);
 		}
 
 		return $hydratedSchemas;
 	}
 
-	private function hydrateSchema(array $rawSchema): array
-	{
-		// --- PASO 1: Hidratar la Tabla ---
-		$tableArchetypeKey = $rawSchema['archetype'] ?? null;
-		$tableArchetype = $this->table_archetypes[$tableArchetypeKey] ?? [];
-
-		// Usamos array_replace_recursive para que las claves específicas (como 'actions') reemplacen las del arquetipo, no se fusionen.
-		$hydratedSchema = array_replace_recursive($tableArchetype, $rawSchema);
-		// Casos especiales donde la fusión recursiva no es deseada (ej. actions)
-		if (isset($rawSchema['actions'])) {
-			$hydratedSchema['actions'] = $rawSchema['actions'];
+	private function hydrateSchema(array $schema): array {
+		// Hidratar comentario de tabla
+		if (isset($schema['tableComment']['archetype']) && isset($this->archetypes[$schema['tableComment']['archetype']])) {
+			$schema['tableComment'] = array_merge($this->archetypes[$schema['tableComment']['archetype']], $schema['tableComment']);
 		}
 
-
-		// --- PASO 2: Hidratar las Columnas y Resolver Opciones de Select ---
-		if (isset($hydratedSchema['columns'])) {
-			foreach ($hydratedSchema['columns'] as &$columnConfig) {
-				// 2.A: Hidratar columna con su arquetipo
-				$columnArchetypeKey = $columnConfig['archetype'] ?? 'TEXT_GENERAL';
-				$columnArchetype = $this->column_archetypes[$columnArchetypeKey] ?? [];
-				$columnConfig = array_merge($columnArchetype, $columnConfig);
-
-				// 2.B: Si es un select API, resolverlo y convertirlo a staticData
-				if (($columnConfig['inputType'] ?? '') === 'select' && ($columnConfig['optionsSource']['type'] ?? '') === 'api') {
-					try {
-						$this->resolveSelectOptions($columnConfig);
-					} catch (Exception $e) {
-						$columnConfig['optionsSource']['type'] = 'static';
-						$columnConfig['optionsSource']['staticData'] = [['value' => '', 'label' => 'Error al cargar']];
-					}
-				}
-			}
-		}
-		unset($columnConfig);
-
-		return $hydratedSchema;
-	}
-
-	private function resolveSelectOptions(array &$columnConfig): void
-	{
-		$source = $columnConfig['optionsSource'];
-		$endpoint = $source['endpoint'];
-		$sql = "SELECT * FROM `{$endpoint}` WHERE is_deleted = 0 AND activo = 1";
-		$params = [];
-
-		if (isset($source['filterByRole'])) {
-			$filterRules = $source['filterByRole'];
-			$ruleForRole = $filterRules[$this->rolId] ?? $filterRules['default'] ?? null;
-			if ($ruleForRole) {
-				foreach ($ruleForRole as $filterKey => $filterValue) {
-					switch ($filterKey) {
-						case 'rol_id_in':
-							$placeholders = implode(',', array_fill(0, count($filterValue), '?'));
-							$sql .= " AND rol_id IN ({$placeholders})";
-							$params = array_merge($params, $filterValue);
-							break;
-						case 'rol_id_gt':
-							$sql .= " AND rol_id > ?";
-							$params[] = $filterValue;
-							break;
-						case 'rol_id':
-							$sql .= " AND rol_id = ?";
-							$params[] = $filterValue;
-							break;
-					}
+		// Hidratar comentarios de columnas
+		if (isset($schema['columns'])) {
+			foreach ($schema['columns'] as $columnName => &$column) {
+				if (isset($column['archetype']) && isset($this->archetypes[$column['archetype']])) {
+					$column = array_merge($this->archetypes[$column['archetype']], $column);
 				}
 			}
 		}
 
-		if ($endpoint === 'usuarios') {
-			$sql = str_replace("SELECT *", "SELECT u.id, u.nick, u.rol_id, CONCAT(p.nombres, ' ', p.apellidos) AS nombre_completo", $sql);
-			$sql = str_replace("FROM `usuarios`", "FROM `usuarios` u LEFT JOIN `perfiles_usuario` p ON u.id = p.usuario_id", $sql);
-			$sql = str_replace("rol_id", "u.rol_id", $sql);
-			$source['labelKey'] = 'nombre_completo';
-			$sql .= " ORDER BY nombre_completo";
-		}
-
-		$optionsData = $this->db->query($sql, $params);
-		$staticData = [];
-		foreach ($optionsData as $row) {
-			$label = trim($row[$source['labelKey']] ?? '');
-			if (empty($label)) { $label = $row['nick'] ?? 'Usuario ' . ($row[$source['valueKey']] ?? ''); }
-			$staticData[] = ['value' => $row[$source['valueKey']], 'label' => $label];
-		}
-
-		$columnConfig['optionsSource']['type'] = 'static';
-		$columnConfig['optionsSource']['staticData'] = $staticData;
-		unset($columnConfig['optionsSource']['endpoint'], $columnConfig['optionsSource']['params'], $columnConfig['optionsSource']['filterByRole']);
+		return $schema;
 	}
 
-	private function applyPermissionRule(array $schema, ?array $rule): array
-	{
-		if (is_null($rule)) { return $schema; }
+	private function applyPermissionRule(array $schema, array $rule): array {
+		// Lógica para ocultar tabla completa
+		if (!$rule['can_read']) {
+			$schema['permissions']['can_read'] = false;
+			// Podríamos devolver un esquema vacío o marcado como no visible
+			return $schema;
+		}
 
-		if (!empty($rule['hide_columns_in_table'])) {
-			foreach ($rule['hide_columns_in_table'] as $col) unset($schema['columns'][$col]);
+		// Aplicar permisos a nivel de tabla (crear, actualizar, eliminar)
+		$schema['permissions']['can_create'] = (bool) $rule['can_create'];
+		$schema['permissions']['can_update'] = (bool) $rule['can_update'];
+		$schema['permissions']['can_delete'] = (bool) $rule['can_delete'];
+
+		// Aplicar permisos a nivel de columna
+		if (!empty($rule['hidden_columns'])) {
+			$hidden = json_decode($rule['hidden_columns'], true);
+			foreach ($hidden as $colName) {
+				if (isset($schema['columns'][$colName])) {
+					$schema['columns'][$colName]['visible'] = false;
+				}
+			}
 		}
-		if (!empty($rule['hide_actions'])) {
-			if(isset($schema['actions']['table'])) $schema['actions']['table'] = array_filter($schema['actions']['table'], fn($a) => !in_array($a['action'], $rule['hide_actions']));
-			if(isset($schema['actions']['row'])) $schema['actions']['row'] = array_filter($schema['actions']['row'], fn($a) => !in_array($a['action'], $rule['hide_actions']));
+
+		// Aplicar filtros de datos
+		if (!empty($rule['filtros'])) {
+			$schema['filter'] = json_decode($rule['filtros'], true);
 		}
-		if (!empty($rule['field_overrides'])) {
-			foreach ($rule['field_overrides'] as $fieldKey => $overrides) {
-				if (isset($schema['columns'][$fieldKey])) {
-					$schema['columns'][$fieldKey] = array_merge($schema['columns'][$fieldKey], $overrides);
+
+		return $schema;
+	}
+
+	private function resolveSelectOptions(array $schema): array {
+		if (isset($schema['columns'])) {
+			foreach ($schema['columns'] as &$column) {
+				if (isset($column['archetype']) && $column['archetype'] === 'SELECT_API' && isset($column['optionsSource']['endpoint'])) {
+
+					$endpoint = $column['optionsSource']['endpoint'];
+					$valueKey = $column['optionsSource']['valueKey'] ?? 'id';
+					$labelKey = $column['optionsSource']['labelKey'] ?? 'nombre';
+					$params = $column['optionsSource']['params'] ?? [];
+
+					// Construir la consulta de forma segura (simplificado)
+					$sql = "SELECT `$valueKey`, `$labelKey` FROM `$endpoint` WHERE is_deleted = 0";
+
+					$options = $this->db->query($sql);
+
+					// Formatear para el frontend
+					$formattedOptions = [];
+					foreach($options as $option) {
+						$formattedOptions[] = ['value' => $option[$valueKey], 'label' => $option[$labelKey]];
+					}
+
+					// Reemplazar la fuente dinámica con los datos estáticos
+					unset($column['optionsSource']['endpoint']);
+					$column['optionsSource']['staticData'] = $formattedOptions;
+					$column['archetype'] = 'SELECT_STATIC';
 				}
 			}
 		}

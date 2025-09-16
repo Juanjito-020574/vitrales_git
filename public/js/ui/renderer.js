@@ -1,174 +1,155 @@
-// /public/js/ui/renderer.js (Versión Final Completa)
+// Indentación con TABS
+// public/js/ui/renderer.js
 
-import { state } from '../app.js';
-import { getSchema, apiFetch } from '../api/client.js';
-
+// CORREGIDO: Usamos los IDs exactos de tu spa_shell.php
 const appContainer = document.getElementById('app-container');
-const navContainer = document.getElementById('main-nav');
-const userInfoContainer = document.getElementById('user-info');
+const navigationContainer = document.getElementById('main-nav');
+const userNavContainer = document.getElementById('user-info');
 
-export function renderNavigation() {
-	let navHTML = '';
-	let userInfoHTML = '';
+export const renderer = {
 
-	if (state.menuItems && state.menuItems.length > 0) {
-		state.menuItems.forEach(item => {
-			navHTML += `<a href="${item.href}">${item.label}</a>`;
-		});
-	} else {
-		navHTML = '<a href="#/inicio">Inicio</a><a href="#/contactos">Contactos</a>';
-	}
+	/**
+	 * Renderiza un título y contenido dentro del contenedor principal.
+	 * CORREGIDO: El título ahora es opcional.
+	 * @param {string|null} title - El título a mostrar en un <h2>, o null para no mostrarlo.
+	 * @param {string} contentHtml - El contenido HTML a renderizar.
+	 */
+	renderView: function(title, contentHtml) {
+		if (!appContainer) return;
 
-	if (state.currentUser && state.currentUser.rol_id < 1000) {
-		userInfoHTML = `<a href="#/app/perfil" class="button-profile">Mi Perfil</a><span><strong>${state.currentUser.nick}</strong></span><button id="logout-button">Cerrar Sesión</button>`;
-	} else {
-		userInfoHTML = '<a href="#/login" class="button">Iniciar Sesión</a>';
-	}
-	navContainer.innerHTML = navHTML;
-	userInfoContainer.innerHTML = userInfoHTML;
-}
+		// Si se proporciona un título, se añade el <h2>. Si no, se omite.
+		const titleHtml = title ? `<h2 class="title">${title}</h2>` : '';
 
-export function updateActiveLink(currentRoute) {
-	const navLinks = document.querySelectorAll('#main-nav a');
-	let bestMatchLink = null;
-	let longestMatchLength = 0;
+		appContainer.innerHTML = titleHtml + contentHtml;
+	},
 
-	navLinks.forEach(link => link.classList.remove('active'));
-	const normalizedCurrentRoute = currentRoute.startsWith('/') ? currentRoute : '/' + currentRoute;
+	renderUserNav: function(session) {
+		if (!userNavContainer) return;
 
-	navLinks.forEach(link => {
-		let linkRoute = link.hash.substring(1);
-		if (!linkRoute.startsWith('/')) { linkRoute = '/' + linkRoute; }
-		if (normalizedCurrentRoute.startsWith(linkRoute) && linkRoute.length > longestMatchLength) {
-			longestMatchLength = linkRoute.length;
-			bestMatchLink = link;
+		let userNavHtml = `
+			<button class="button is-primary" data-action="show-login">
+				<strong>Iniciar Sesión</strong>
+			</button>
+		`;
+		if (session.isLoggedIn) {
+			userNavHtml = `
+				<div class="navbar-item has-dropdown is-hoverable">
+					<a class="navbar-link">
+						<span class="icon"><i class="fas fa-user"></i></span>
+						<span>${session.user.nick}</span>
+					</a>
+					<div class="navbar-dropdown is-right">
+						<a class="navbar-item" data-action="logout">
+							Cerrar Sesión
+						</a>
+					</div>
+				</div>
+			`;
 		}
-	});
-	if (bestMatchLink) { bestMatchLink.classList.add('active'); }
-}
+		userNavContainer.innerHTML = userNavHtml;
+	},
 
-export function renderInicioView() { appContainer.innerHTML = '<div class="content-box"><h2>Bienvenido</h2><p>Sistema Vitrales v2.</p></div>'; }
-export function renderContactosView() { appContainer.innerHTML = '<div class="content-box"><h2>Contacto</h2></div>'; }
+	renderNavigation: function(appSchema, session) {
+		if (!navigationContainer) return;
 
-export function renderLoginView(loginHandler) {
-	appContainer.innerHTML = `
-		<div class="login-box">
-			<h2>Iniciar Sesión</h2>
-			<form id="login-form">
-				<div class="form-group"><label for="nick">Usuario:</label><input type="text" id="nick" name="nick" required></div>
-				<div class="form-group"><label for="password">Contraseña:</label><input type="password" id="password" name="password" required></div>
-				<div id="login-error" class="error-message" style="display:none;"></div>
-				<button type="submit">Acceder</button>
-			</form>
-		</div>
-	`;
-	document.getElementById('login-form').addEventListener('submit', loginHandler);
-}
+		let navHtml = `
+			<a href="#/app/inicio" class="nav-link">Inicio</a>
+			<a href="#/app/contactos" class="nav-link">Contactos</a>
+		`;
 
-export async function renderDynamicView(tableName) {
-	appContainer.innerHTML = '<div class="loader"></div>';
-	// Pasamos la URL completa al actualizador de links
-	updateActiveLink(location.hash.substring(1));
+		if (session.isLoggedIn && appSchema) {
+			for (const tableName in appSchema) {
+				const tableSchema = appSchema[tableName];
+				const tableComment = tableSchema.tableComment || {};
 
-	try {
-		state.currentSchema = getSchema(tableName);
-		if (!state.currentSchema) {
-			throw new Error(`Esquema para la tabla '${tableName}' no encontrado. Posiblemente no tienes permiso para ver esta sección.`);
-		}
-
-		const data = await apiFetch(tableName);
-		let html = `<div class="content-box" data-table-name="${tableName}">`;
-
-		html += '<div class="table-actions">';
-		if (state.currentSchema.actions?.table && state.currentSchema.actions.table.length > 0) {
-			state.currentSchema.actions.table.forEach(action => { html += `<button class="action-button" data-action="${action.action}">${action.label}</button>`; });
-		}
-		html += '</div>';
-
-		html += `<h2>${state.currentSchema.labelPlural || `Lista de ${tableName}`}</h2>`;
-		html += '<table class="data-table"><thead><tr>';
-		for (const columnKey in state.currentSchema.columns) {
-			const colConfig = state.currentSchema.columns[columnKey];
-			if (colConfig.visible !== false) {
-				html += `<th>${colConfig.title || columnKey}</th>`;
+				if (tableComment.archetype === 'ENTIDAD_PRINCIPAL') {
+					const label = tableComment.labelPlural || tableName;
+					const route = `#/app/${tableName}`;
+					navHtml += `<a href="${route}" class="nav-link">${label}</a>`;
+				}
 			}
 		}
-		if (state.currentSchema.actions?.row && state.currentSchema.actions.row.length > 0) {
-			html += '<th>Acciones</th>';
-		}
-		html += '</tr></thead><tbody>';
+		navigationContainer.innerHTML = navHtml;
+	},
 
-		if (data.length === 0) {
-			const colCount = Object.keys(state.currentSchema.columns).filter(key => state.currentSchema.columns[key].visible !== false).length + (state.currentSchema.actions?.row?.length ? 1 : 0);
-			html += `<tr><td colspan="${colCount}">No hay registros.</td></tr>`;
-		} else {
-			data.forEach(row => {
-				html += '<tr>';
-				for (const columnKey in state.currentSchema.columns) {
-					const colConfig = state.currentSchema.columns[columnKey];
-					if (colConfig.visible !== false) {
-						const originalValue = row[columnKey] ?? '';
-						let displayValue = originalValue;
-
-						if (colConfig.optionsSource?.staticData && originalValue !== '') {
-							const option = colConfig.optionsSource.staticData.find(opt => opt.value == originalValue);
-							if (option) {
-								displayValue = option.label;
-							}
-						}
-
-						html += `<td data-value="${originalValue}">${displayValue}</td>`;
-					}
-				}
-
-				if (state.currentSchema.actions?.row && state.currentSchema.actions.row.length > 0) {
-					html += '<td>';
-					const primaryKey = state.currentSchema.primaryKey || 'id';
-					state.currentSchema.actions.row.forEach(action => {
-						html += `<button class="action-button-row" data-action="${action.action}" data-id="${row[primaryKey]}">${action.label}</button> `;
-					});
-					html += '</td>';
-				}
-				html += '</tr>';
-			});
-		}
-		html += '</tbody></table></div>';
-		appContainer.innerHTML = html;
-	} catch (error) {
-		appContainer.innerHTML = `<p class="error-message">Error al renderizar la vista: ${error.message}</p>`;
-	}
-}
-
-export async function renderPerfilView() {
-	appContainer.innerHTML = '<div class="loader"></div>';
-	updateActiveLink('/app/perfil');
-	try {
-		const [userData, userProfileData, userSchema, profileSchema] = await Promise.all([
-			getRecordById('usuarios', state.currentUser.id),
-			getRecordById('perfiles_usuario', state.currentUser.id),
-			getSchema('usuarios'),
-			getSchema('perfiles_usuario')
-		]);
-
-		// TODO: Construir dos formularios para editar los datos.
-		// Por ahora, solo mostramos la información.
-		let html = `
-			<div class="content-box">
-				<h2>Mi Perfil</h2>
-				<p>Aquí podrás editar tu información personal y de cuenta.</p>
-				<hr>
-				<h3>Datos de Cuenta (Tabla: usuarios)</h3>
-				<p><strong>Nick:</strong> ${userData.nick}</p>
-				<p><strong>Email:</strong> ${userData.email}</p>
-				<hr>
-				<h3>Datos Personales (Tabla: perfiles_usuario)</h3>
-				<p><strong>Nombres:</strong> ${userProfileData.nombres}</p>
-				<p><strong>Apellidos:</strong> ${userProfileData.apellidos}</p>
-				<p><strong>Cargo:</strong> ${userProfileData.cargo}</p>
+	/**
+	- * Muestra el formulario de login.
+	- */
+	renderLogin: function() {
+		const formHtml = `
+			<div class="login-box">
+				<h2>Iniciar Sesión</h2>
+				<form id="login-form">
+					<div class="form-group">
+						<label for="nick">Usuario:</label>
+						<input type="text" id="nick" name="nick" required>
+					</div>
+					<div class="form-group">
+						<label for="password">Contraseña:</label>
+						<input type="password" id="password" name="password" required>
+					</div>
+					<div id="login-error" class="error-message is-hidden" ></div>
+					<button class="button" type="submit" data-action="submit-login">Acceder</button>
+				</form>
 			</div>
 		`;
-		appContainer.innerHTML = html;
-	} catch (error) {
-		appContainer.innerHTML = `<p class="error-message">Error al cargar el perfil: ${error.message}</p>`;
-	}
-}
+		// Usamos nuestra función central, pero ahora no le pasamos título,
+		// ya que el propio HTML del formulario ya lo incluye con <h2>.
+		// Para ello, modificamos ligeramente renderView para que el título sea opcional.
+		this.renderView(null, formHtml);
+	},
+
+	renderTable: function(tableSchema, data) {
+		const tableComment = tableSchema.tableComment || {};
+		const columns = tableSchema.columns || {};
+
+		let headerHtml = `
+			<div class="table-header">
+				<button class="button is-primary" data-action="open-create-form">
+					<span class="icon"><i class="fas fa-plus"></i></span>
+					<span>${tableComment.actions?.table[0]?.label || 'Nuevo'}</span>
+				</button>
+			</div>
+		`;
+
+		let tableHtml = '<table class="table is-fullwidth is-striped is-hoverable"><thead><tr>';
+		for (const columnName in columns) {
+			const columnSchema = columns[columnName];
+			if (columnSchema.visible !== false) { tableHtml += `<th>${columnSchema.title || columnName}</th>`; }
+		}
+		tableHtml += '<th>Acciones</th></tr></thead>';
+
+		tableHtml += '<tbody>';
+		if (data.length === 0) {
+			const columnCount = Object.keys(columns).filter(c => columns[c].visible !== false).length + 1;
+			tableHtml += `<tr><td colspan="${columnCount}" class="has-text-centered">No hay datos para mostrar.</td></tr>`;
+		} else {
+			data.forEach(row => {
+				tableHtml += `<tr data-id="${row.id}">`;
+				for (const columnName in columns) {
+					const columnSchema = columns[columnName];
+					if (columnSchema.visible !== false) { tableHtml += `<td>${row[columnName] ?? ''}</td>`; }
+				}
+				tableHtml += `
+					<td class="actions-cell">
+						<button class="button is-small is-info" data-action="open-edit-form" data-id="${row.id}"><span class="icon"><i class="fas fa-edit"></i></span></button>
+						<button class="button is-small is-danger" data-action="trigger-delete" data-id="${row.id}"><span class="icon"><i class="fas fa-trash"></i></span></button>
+					</td>
+				`;
+				tableHtml += '</tr>';
+			});
+		}
+		tableHtml += '</tbody></table>';
+
+		const tableTitle = tableComment.labelPlural || tableSchema.tableName;
+		this.renderView(tableTitle, headerHtml + tableHtml);
+	},
+
+	renderDashboard: function(title, subtitle) {
+		this.renderView(title, `<p>${subtitle}</p>`);
+	},
+
+	renderError: function(message) {
+		this.renderView('Error', `<div class="notification is-danger">${message}</div>`);
+	},
+};

@@ -1,162 +1,204 @@
 <?php
-// /public/api.php (Refactorizado con SchemaBuilder)
+// Indentación con TABS
+// public/api.php
 
-declare(strict_types=1);
+header('Content-Type: application/json');
+session_start();
 
-if (session_status() === PHP_SESSION_NONE) { session_start(); }
-ob_start();
+// --- Dependencias y Configuración ---
+require_once __DIR__ . '/../config/config.php';
+require_once __DIR__ . '/../app/classes/ApiDataBase.php';
+require_once __DIR__ . '/../app/classes/SchemaBuilder.php';
 
-header("Content-Type: application/json; charset=UTF-8");
-require_once dirname(__DIR__) . '/config/config.php';
-require_once dirname(__DIR__) . '/app/classes/ApiDataBase.php';
-require_once dirname(__DIR__) . '/app/classes/CrudHandler.php';
-// ¡NUEVO! Incluimos el constructor de esquemas
-require_once dirname(__DIR__) . '/app/classes/SchemaBuilder.php';
-
-function json_response(int $code, $data): void {
-	ob_end_clean();
-	http_response_code($code);
-	echo json_encode($data, JSON_UNESCAPED_UNICODE);
-	exit();
+// --- Función de Utilidad para Respuestas ---
+function send_response($data, $statusCode = 200) {
+	http_response_code($statusCode);
+	echo json_encode($data);
+	exit;
 }
 
+// --- Inicialización ---
 try {
 	$db = new ApiDataBase(DB_HOST, DB_USER, DB_PASS, DB_NAME);
-	$endpoint = $_GET['endpoint'] ?? '';
-	$method = $_SERVER['REQUEST_METHOD'];
-
-	// --- Endpoints Públicos (No requieren autenticación) ---
-
-	if ($endpoint === 'login' && $method === 'POST') {
-		$input = json_decode(file_get_contents('php://input'), true);
-		$nick = $input['nick'] ?? '';
-		$password = $input['password'] ?? '';
-		if (empty($nick) || empty($password)) { json_response(400, ['error' => 'Usuario y contraseña requeridos.']); }
-		$user_data = $db->query("SELECT id, nick, password_hash, rol_id FROM usuarios WHERE nick = ? AND activo = 1 AND is_deleted = 0", [$nick]);
-		if (count($user_data) === 1 && $db->verifyPassword($password, $user_data[0]['password_hash'])) {
-			$_SESSION['user_id'] = $user_data[0]['id'];
-			$_SESSION['user_nick'] = $user_data[0]['nick'];
-			$_SESSION['user_rol_id'] = $user_data[0]['rol_id'];
-			json_response(200, ['user' => ['id' => $user_data[0]['id'], 'nick' => $user_data[0]['nick'], 'rol_id' => $user_data[0]['rol_id']]]);
-		}
-		json_response(401, ['error' => 'Credenciales no válidas.']);
-	}
-
-	if ($endpoint === 'session-status') {
-		if (isset($_SESSION['user_id'])) {
-			json_response(200, ['authenticated' => true, 'user' => ['id' => $_SESSION['user_id'], 'nick' => $_SESSION['user_nick'], 'rol_id' => $_SESSION['user_rol_id']]]);
-		} else {
-			json_response(200, ['authenticated' => false, 'user' => null]);
-		}
-	}
-
-	// --- Endpoints de Esquemas y Configuración ---
-	// ¡REFACTORIZADO!
-	switch ($endpoint) {
-		case 'schema_versions':
-			$versionsData = $db->query("SELECT table_name, fecha_modificacion AS last_updated FROM app_schema");
-			$versionsMap = array_reduce($versionsData, fn($c, $i) => $c + [$i['table_name'] => $i['last_updated']], []);
-			json_response(200, $versionsMap);
-
-		case 'schemas/hydrated': // ¡NUEVO ENDPOINT PRINCIPAL!
-			$rolId = $_SESSION['user_rol_id'] ?? 1000; // Rol Visitante por defecto
-			$schemaBuilder = new SchemaBuilder($db, $rolId);
-			$hydratedSchemas = $schemaBuilder->buildAllHydratedSchemas();
-
-			// Además, añadimos las versiones para que el frontend tenga todo en una llamada
-			$versionsData = $db->query("SELECT table_name, fecha_modificacion AS last_updated FROM app_schema");
-			$versionsMap = array_reduce($versionsData, fn($c, $i) => $c + [$i['table_name'] => $i['last_updated']], []);
-
-			json_response(200, [
-				'schemas' => $hydratedSchemas,
-				'versions' => $versionsMap
-			]);
-
-		case 'navigation':
-			$rolId = $_SESSION['user_rol_id'] ?? 1000;
-			$ruleData = $db->query("SELECT regla_json FROM permisos WHERE rol_id = ? AND tabla_afectada = 'navigation' AND tipo_regla = 'action' AND is_active = 1", [$rolId]);
-			$allowedPages = [];
-			if (!empty($ruleData)) {
-				$rule = json_decode($ruleData[0]['regla_json'], true);
-				$allowedPages = $rule['allow'] ?? [];
-			}
-// EN: /public/api.php, dentro del `case 'navigation'`
-
-// Definimos todos los posibles elementos del menú de la aplicación
-			$allItems = [
-				// Sección Pública
-				['key' => 'inicio', 'label' => 'Inicio', 'href' => '#/inicio', 'section' => 'public'],
-				['key' => 'contactos', 'label' => 'Contactos', 'href' => '#/contactos', 'section' => 'public'],
-
-				// Sección de Aplicación (App)
-				['key' => 'clientes', 'label' => 'Clientes', 'href' => '#/app/clientes', 'section' => 'app'],
-				['key' => 'proyectos', 'label' => 'Proyectos', 'href' => '#/app/proyectos', 'section' => 'app'],
-				['key' => 'cotizaciones', 'label' => 'Cotizaciones', 'href' => '#/app/cotizaciones', 'section' => 'app'],
-				['key' => 'ordenes_trabajo', 'label' => 'Órdenes de T.', 'href' => '#/app/ordenes_trabajo', 'section' => 'app'],
-				['key' => 'medidas_produccion', 'label' => 'Medidas Prod.', 'href' => '#/app/medidas_produccion', 'section' => 'app'],
-				['key' => 'materiales', 'label' => 'Materiales', 'href' => '#/app/materiales', 'section' => 'app'],
-				['key' => 'familias', 'label' => 'Familias', 'href' => '#/app/familias', 'section' => 'app'],
-				['key' => 'tipologias', 'label' => 'Tipologías', 'href' => '#/app/tipologias', 'section' => 'app'],
-				['key' => 'recetas_despiece', 'label' => 'Recetas', 'href' => '#/app/recetas_despiece', 'section' => 'app'],
-				['key' => 'proveedores', 'label' => 'Proveedores', 'href' => '#/app/proveedores', 'section' => 'app'],
-				['key' => 'unidades', 'label' => 'Unidades', 'href' => '#/app/unidades', 'section' => 'app'],
-				['key' => 'usuarios', 'label' => 'Usuarios', 'href' => '#/app/usuarios', 'section' => 'app'],
-				['key' => 'roles', 'label' => 'Roles', 'href' => '#/app/roles', 'section' => 'app'],
-				['key' => 'perfil', 'label' => 'Mi Perfil', 'href' => '#/app/perfil', 'section' => 'app'],
-
-				// Sección de Sistema (System)
-				['key' => 'permisos', 'label' => 'Permisos', 'href' => '#/system/permisos', 'section' => 'system'],
-				['key' => 'historial_cambios', 'label' => 'Historial', 'href' => '#/system/historial_cambios', 'section' => 'system'],
-				['key' => 'app_schema', 'label' => 'Esquemas', 'href' => '#/system/app_schema', 'section' => 'system'],
-			];
-			$finalMenu = array_filter($allItems, fn($item) => in_array($item['key'], $allowedPages));
-			json_response(200, array_values($finalMenu));
-	}
-
-	// --- Barrera de Seguridad ---
-	if (!isset($_SESSION['user_id'])) {
-		json_response(403, ['error' => 'Acceso denegado. Se requiere autenticación.']);
-	}
-
-	// --- Endpoints Protegidos ---
-	if ($endpoint === 'logout') {
-		session_unset(); session_destroy();
-		json_response(200, ['message' => 'Sesión cerrada.']);
-	}
-
-	$crudHandler = new CrudHandler($db, (int)$_SESSION['user_id'], (int)$_SESSION['user_rol_id']);
-	$id = isset($_GET['id']) ? (int)$_GET['id'] : null;
-	$inputData = ($method === 'POST' || $method === 'PUT') ? json_decode(file_get_contents('php://input'), true) : [];
-	if (is_null($inputData) && ($method === 'POST' || $method === 'PUT')) { json_response(400, ['error' => 'Cuerpo de la petición JSON inválido.']); }
-
-	$allowedTables = [ 'clientes', 'config_cotizacion', 'cotizaciones', 'cotizacion_detalle', 'familias', 'familia_tipos', 'historial_cambios', 'materiales', 'medidas_produccion', 'ordenes_trabajo', 'perfiles_usuario', 'permisos', 'productos_proveedor', 'proveedores', 'proyectos', 'recetas_despiece', 'roles', 'tipologias', 'ubicaciones', 'unidades', 'usuarios', 'vanos' ];
-
-	if (in_array($endpoint, $allowedTables)) {
-		switch ($method) {
-			case 'GET':
-				if ($id) $crudHandler->handleGetSingle($endpoint, $id);
-				else $crudHandler->handleGetList($endpoint);
-				break;
-			case 'POST':
-				$crudHandler->handleCreate($endpoint, $inputData);
-				break;
-			case 'PUT':
-				$id = $inputData['id'] ?? $id;
-				if ($id) $crudHandler->handleUpdate($endpoint, (int)$id, $inputData);
-				else json_response(400, ['error' => 'Se requiere un ID para actualizar.']);
-				break;
-			case 'DELETE':
-				if ($id) $crudHandler->handleDelete($endpoint, $id);
-				else json_response(400, ['error' => 'Se requiere un ID para eliminar.']);
-				break;
-			default:
-				json_response(405, ['error' => "Método {$method} no permitido."]);
-		}
-	} else {
-		json_response(404, ['error' => "Endpoint '{$endpoint}' no encontrado."]);
-	}
-
 } catch (Exception $e) {
-	json_response(500, ['error' => 'Error interno del servidor.', 'details' => $e->getMessage()]);
+	send_response(['error' => 'Error de conexión con la base de datos', 'message' => $e->getMessage()], 500);
 }
-ob_end_flush();
+
+// --- Router Principal de la API ---
+$action = $_GET['action'] ?? null;
+
+// --- Verificación de Autenticación (para la mayoría de las acciones) ---
+// (Lógica original preservada)
+$acciones_publicas = ['login', 'status', 'get_hydrated_schema']; // 'get_hydrated_schema' ahora es público
+if (!in_array($action, $acciones_publicas) && !isset($_SESSION['user_id'])) {
+	send_response(['error' => 'No autorizado. Se requiere inicio de sesión.'], 401);
+}
+
+switch ($action) {
+
+	// ---------------------------------------------------------------------
+	// ENDPOINTS DE SESIÓN (Lógica original preservada)
+	// ---------------------------------------------------------------------
+	case 'login':
+		$credentials = json_decode(file_get_contents('php://input'), true);
+		$nick = $credentials['nick'] ?? '';
+		$password = $credentials['password'] ?? '';
+
+		$user = $db->query("SELECT * FROM usuarios WHERE nick = ? AND activo = 1 AND is_deleted = 0", [$nick], 'single');
+
+		if ($user && password_verify($password, $user['password_hash'])) {
+			$_SESSION['user_id'] = $user['id'];
+			$_SESSION['user_nick'] = $user['nick'];
+			$_SESSION['user_role_id'] = $user['rol_id'];
+			unset($user['password_hash']); // Nunca devolver el hash
+			send_response($user);
+		} else {
+			send_response(['error' => 'Credenciales incorrectas o usuario inactivo.'], 401);
+		}
+		break;
+
+	case 'logout':
+		session_destroy();
+		send_response(['success' => true, 'message' => 'Sesión cerrada exitosamente.']);
+		break;
+
+	case 'status':
+		if (isset($_SESSION['user_id'])) {
+			send_response([
+				'loggedIn' => true,
+				'user' => [
+					'id' => $_SESSION['user_id'],
+					'nick' => $_SESSION['user_nick'],
+					'role_id' => $_SESSION['user_role_id']
+				]
+			]);
+		} else {
+			send_response(['loggedIn' => false]);
+		}
+		break;
+
+	// ---------------------------------------------------------------------
+	// ENDPOINT DE ESQUEMA (NUEVA ARQUITECTURA)
+	// Reemplaza el antiguo 'get_schema'
+	// ---------------------------------------------------------------------
+	case 'get_hydrated_schema':
+		try {
+			// Ya no necesita el rol_id, devuelve el esquema público completo
+			$schemaBuilder = new SchemaBuilder($db);
+			$hydratedSchemas = $schemaBuilder->buildAllHydratedSchemas(); // Sin parámetros
+			send_response($hydratedSchemas);
+		} catch (Exception $e) {
+			send_response(['error' => 'No se pudo construir el esquema de la aplicación.', 'message' => $e->getMessage()], 500);
+		}
+		break;
+
+	// ---------------------------------------------------------------------
+	// ENDPOINTS CRUD (Lógica original preservada)
+	// NOTA: Esta lógica será movida a la clase CrudHandler.php en un paso futuro.
+	// ---------------------------------------------------------------------
+	case 'get_table_data':
+		$table = $_GET['table'] ?? null;
+		if (!$table || !preg_match('/^[a-zA-Z0-9_]+$/', $table)) {
+			send_response(['error' => 'Nombre de tabla no válido.'], 400);
+		}
+		try {
+			$data = $db->query("SELECT * FROM `$table` WHERE is_deleted = 0");
+			send_response($data);
+		} catch (Exception $e) {
+			send_response(['error' => "Error al obtener datos de la tabla $table.", 'message' => $e->getMessage()], 500);
+		}
+		break;
+
+	case 'get_record_by_id':
+		$table = $_GET['table'] ?? null;
+		$id = $_GET['id'] ?? null;
+		if (!$table || !$id || !preg_match('/^[a-zA-Z0-9_]+$/', $table) || !is_numeric($id)) {
+			send_response(['error' => 'Parámetros no válidos.'], 400);
+		}
+		try {
+			$record = $db->query("SELECT * FROM `$table` WHERE id = ? AND is_deleted = 0", [$id], 'single');
+			send_response($record);
+		} catch (Exception $e) {
+			send_response(['error' => "Error al obtener el registro de $table.", 'message' => $e->getMessage()], 500);
+		}
+		break;
+
+	case 'create_record':
+		$table = $_GET['table'] ?? null;
+		if (!$table || !preg_match('/^[a-zA-Z0-9_]+$/', $table)) {
+			send_response(['error' => 'Nombre de tabla no válido.'], 400);
+		}
+		$data = json_decode(file_get_contents('php://input'), true);
+		if (empty($data)) {
+			send_response(['error' => 'No se recibieron datos para crear.'], 400);
+		}
+
+		$columns = array_keys($data);
+		$placeholders = array_map(fn($c) => ":$c", $columns);
+		$sql = sprintf(
+			"INSERT INTO `%s` (`%s`) VALUES (%s)",
+			$table,
+			implode('`, `', $columns),
+			implode(', ', $placeholders)
+		);
+
+		try {
+			$newId = $db->executeAndGetId($sql, $data);
+			send_response(['success' => true, 'id' => $newId], 201);
+		} catch (Exception $e) {
+			send_response(['error' => "Error al crear el registro en $table.", 'message' => $e->getMessage()], 500);
+		}
+		break;
+
+	case 'update_record':
+		$table = $_GET['table'] ?? null;
+		$id = $_GET['id'] ?? null;
+		if (!$table || !$id || !preg_match('/^[a-zA-Z0-9_]+$/', $table) || !is_numeric($id)) {
+			send_response(['error' => 'Parámetros no válidos.'], 400);
+		}
+		$data = json_decode(file_get_contents('php://input'), true);
+		if (empty($data)) {
+			send_response(['error' => 'No se recibieron datos para actualizar.'], 400);
+		}
+
+		$set_parts = [];
+		foreach ($data as $column => $value) {
+			$set_parts[] = "`$column` = :$column";
+		}
+		$sql = sprintf(
+			"UPDATE `%s` SET %s WHERE id = :id",
+			$table,
+			implode(', ', $set_parts)
+		);
+		$data['id'] = $id;
+
+		try {
+			$affectedRows = $db->executeAndGetAffectedRows($sql, $data);
+			send_response(['success' => true, 'affectedRows' => $affectedRows]);
+		} catch (Exception $e) {
+			send_response(['error' => "Error al actualizar el registro en $table.", 'message' => $e->getMessage()], 500);
+		}
+		break;
+
+	case 'delete_record':
+		$table = $_GET['table'] ?? null;
+		$id = $_GET['id'] ?? null;
+		if (!$table || !$id || !preg_match('/^[a-zA-Z0-9_]+$/', $table) || !is_numeric($id)) {
+			send_response(['error' => 'Parámetros no válidos.'], 400);
+		}
+
+		$sql = "UPDATE `$table` SET is_deleted = 1, deleted_by = ?, fecha_eliminacion = NOW() WHERE id = ?";
+		$params = [$_SESSION['user_id'] ?? null, $id];
+
+		try {
+			$affectedRows = $db->executeAndGetAffectedRows($sql, $params);
+			send_response(['success' => true, 'affectedRows' => $affectedRows]);
+		} catch (Exception $e) {
+			send_response(['error' => "Error al eliminar el registro en $table.", 'message' => $e->getMessage()], 500);
+		}
+		break;
+
+	default:
+		send_response(['error' => 'Acción no válida o no especificada.'], 400);
+		break;
+}

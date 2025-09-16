@@ -180,6 +180,10 @@ nav#main-nav a.active {
 	border-radius: 5px;
 	box-shadow: 0 4px 10px rgba(0,0,0,0.1);
 }
+.login-box .button{
+	margin: 2px auto;
+	display: block;
+}
 .form-group {
 	margin-bottom: 1rem;
 }
@@ -203,6 +207,12 @@ nav#main-nav a.active {
 	margin-top: 1rem;
 }
 
+/* ---- [HIDDEN] oculto o invisible*/
+.is-hidden{
+	display: none;
+	opacity: 0;
+	pointer-events: none; /* No se puede hacer clic cuando está oculto */
+}
 /* --- [NUEVO] Loading Spinner --- */
 .loader {
 	border: 5px solid #f3f3f3; /* Light grey */
