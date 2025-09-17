@@ -1,9 +1,9 @@
 <?php
 // Indentación con TABS
 // public/api.php
+session_start();
 
 header('Content-Type: application/json');
-session_start();
 
 // --- Dependencias y Configuración ---
 require_once __DIR__ . '/../config/config.php';
@@ -66,6 +66,26 @@ switch ($action) {
 		}
 		break;
 
+	case 'logout':
+		// Destruye todas las variables de sesión.
+		$_SESSION = [];
+
+		// Si se desea destruir la sesión completamente, borra también la cookie de sesión.
+		// Nota: ¡Esto destruirá la sesión, y no solo los datos de la sesión!
+		if (ini_get("session.use_cookies")) {
+			$params = session_get_cookie_params();
+			setcookie(session_name(), '', time() - 42000,
+				$params["path"], $params["domain"],
+				$params["secure"], $params["httponly"]
+			);
+		}
+
+		// Finalmente, destruye la sesión.
+		session_destroy();
+
+		send_response(['status' => 'success', 'message' => 'Sesión cerrada correctamente.']);
+	break;
+
 	case 'status':
 		if (isset($_SESSION['user_id'])) {
 			send_response([
@@ -86,15 +106,25 @@ switch ($action) {
 	// Reemplaza el antiguo 'get_schema'
 	// ---------------------------------------------------------------------
 	case 'get_hydrated_schema':
-		try {
-			// Ya no necesita el rol_id, devuelve el esquema público completo
-			$schemaBuilder = new SchemaBuilder($db);
-			$hydratedSchemas = $schemaBuilder->buildAllHydratedSchemas(); // Sin parámetros
-			send_response($hydratedSchemas);
-		} catch (Exception $e) {
-			send_response(['error' => 'No se pudo construir el esquema de la aplicación.', 'message' => $e->getMessage()], 500);
+		// Requiere autenticación.
+		if (!isset($_SESSION['user_id']) || !isset($_SESSION['user_rol_id'])) {
+			send_response(['error' => 'Acceso no autorizado o sesión inválida.'], 401);
+			break;
 		}
-		break;
+
+		// Obtenemos el ID del rol del usuario desde la sesión.
+		$userRoleId = (int)$_SESSION['user_rol_id'];
+
+		// Instanciamos el SchemaBuilder.
+		require_once __DIR__ . '/../app/classes/SchemaBuilder.php';
+		$schemaBuilder = new SchemaBuilder($db);
+
+		// Obtenemos el esquema final, específico para el rol de este usuario.
+		$hydratedSchema = $schemaBuilder->getHydratedSchemaForUser($userRoleId);
+
+		// Enviamos el esquema como respuesta.
+		send_response($hydratedSchema);
+	break;
 
 	// ---------------------------------------------------------------------
 	// ENDPOINTS CRUD (Lógica original preservada)

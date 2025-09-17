@@ -1,4 +1,5 @@
 <?php
+session_start();
 // /public/index.php
 
 // Carga el caparazón de nuestra Single-Page Application (SPA).

@@ -1,4 +1,5 @@
 <?php
+session_start();
 // /templates/spa_shell.php
 ?>
 <!DOCTYPE html>
@@ -13,6 +14,7 @@
 
 	<header>
 		<h1>Sistema de Cotizaciones Vitrales v2</h1>
+		<div><?PHP //print_r($_SESSION);?></div>
 		<div id="user-info">
 			<!-- El botón de login/logout y el nombre de usuario se generan aquí -->
 		</div>
