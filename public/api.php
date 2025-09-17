@@ -46,7 +46,16 @@ switch ($action) {
 
 		$user = $db->query("SELECT * FROM usuarios WHERE nick = ? AND activo = 1 AND is_deleted = 0", [$nick], 'single');
 
-		if ($user && password_verify($password, $user['password_hash'])) {
+		// --- SOLUCIÓN DE FONDO ---
+		// 1. Verificamos que se haya encontrado UN usuario.
+		// 2. Verificamos que el campo 'password_hash' exista antes de usarlo.
+		if (!is_array($user) || empty($user) || !isset($user['password_hash'])) {
+			// Si no se encuentra el usuario o faltan datos, devolvemos el error 401.
+			send_response(['error' => 'Credenciales incorrectas o usuario inactivo.'], 401);
+		}
+
+		// Si el usuario fue encontrado, procedemos a verificar la contraseña.
+		if (password_verify($password, $user['password_hash'])) {
 			$_SESSION['user_id'] = $user['id'];
 			$_SESSION['user_nick'] = $user['nick'];
 			$_SESSION['user_role_id'] = $user['rol_id'];
@@ -55,11 +64,6 @@ switch ($action) {
 		} else {
 			send_response(['error' => 'Credenciales incorrectas o usuario inactivo.'], 401);
 		}
-		break;
-
-	case 'logout':
-		session_destroy();
-		send_response(['success' => true, 'message' => 'Sesión cerrada exitosamente.']);
 		break;
 
 	case 'status':
