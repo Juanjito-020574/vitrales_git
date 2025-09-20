@@ -159,6 +159,14 @@ switch ($action) {
 		$data = get_input_data();
 		if (empty($data)) { send_response(['error' => 'No se recibieron datos para crear.'], 400); }
 
+		// --- ¡ESTA ES LA NUEVA LÓGICA DE AUDITORÍA! ---
+		// Inyectamos automáticamente los datos del usuario de la sesión.
+		if (isset($_SESSION['user_id'])) {
+			$data['creado_por'] = $_SESSION['user_id'];
+			$data['modificado_por'] = $_SESSION['user_id']; // En la creación, ambos son el mismo.
+		}
+		// ---------------------------------------------
+
 		$columns = array_keys($data);
 		$placeholders = implode(', ', array_fill(0, count($columns), '?'));
 		$sql = sprintf("INSERT INTO `%s` (`%s`) VALUES (%s)", $table, implode('`, `', $columns), $placeholders);
@@ -174,6 +182,12 @@ switch ($action) {
 
 		$data = get_input_data();
 		if (empty($data)) { send_response(['error' => 'No se recibieron datos para actualizar.'], 400); }
+
+		// --- ¡NUEVA LÓGICA DE AUDITORÍA PARA ACTUALIZACIÓN! ---
+		if (isset($_SESSION['user_id'])) {
+			$data['modificado_por'] = $_SESSION['user_id'];
+		}
+		// ---------------------------------------------------
 
 		$set_parts = array_map(fn($col) => "`{$col}` = ?", array_keys($data));
 		$sql = sprintf("UPDATE `%s` SET %s WHERE id = ?", $table, implode(', ', $set_parts));

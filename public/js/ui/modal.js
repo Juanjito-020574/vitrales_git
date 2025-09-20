@@ -1,118 +1,150 @@
-// Indentación con TABS
-// public/js/ui/modal.js
+// public/js/ui/modal.js (indentación con TABS)
 
 const modalContainer = document.getElementById('modal-container');
 
-// Estado interno del módulo del modal
-let _currentSchema = null;
-let _currentData = null;
+// Estado interno del módulo
+let _onSubmitCallback = null;
 
 export const modal = {
 
-	/**
-	 * Abre el modal y construye un formulario basado en un esquema y datos.
-	 * @param {object} tableSchema - El esquema de la tabla para construir el formulario.
-	 * @param {object|null} recordData - Los datos del registro para rellenar el formulario (null si es nuevo).
-	 */
-	openForm: function(tableSchema, recordData) {
+	openForm: function(tableSchema, recordData, onSubmit) {
 		if (!modalContainer) return;
 
-		_currentSchema = tableSchema;
-		_currentData = recordData;
+		// Usamos TU clase 'modal-open' en el BODY para bloquear el scroll.
+		document.body.classList.add('modal-open');
+
+		// Hacemos visible el contenedor principal.
+		modalContainer.classList.remove('modal-hidden');
+
+		_onSubmitCallback = onSubmit;
 
 		const isEditing = recordData !== null;
-		const title = isEditing
-			? `Editar ${tableSchema.tableComment.label || ''}`
-			: `Nuevo ${tableSchema.tableComment.label || ''}`;
+		const title = isEditing ? `Editar ${tableSchema.label || ''}` : `Nuevo ${tableSchema.label || ''}`;
 
+		// --- ¡ESTE ES EL HTML SINCRONIZADO CON TU CSS! ---
 		let formHtml = `
-			<div class="modal is-active">
-				<div class="modal-background" data-action="close-modal"></div>
-				<div class="modal-card">
-					<header class="modal-card-head">
-						<p class="modal-card-title">${title}</p>
-						<button class="delete" aria-label="close" data-action="close-modal"></button>
-					</header>
-					<section class="modal-card-body">
+			<div class="modal-background" data-action="close-modal"></div>
+			<div id="modal-content">
+				<header class="modal-header">
+					<h2>${title}</h2>
+					<button id="modal-close-btn" aria-label="close" data-action="close-modal">&times;</button>
+				</header>
+
+				<form id="dynamic-form" class="form-box">
+					<section class="modal-body">
 						${this.buildFormFields(tableSchema.columns, recordData)}
 					</section>
-					<footer class="modal-card-foot">
-						<button class="button is-success" data-action="submit-form">Guardar</button>
-						<button class="button" data-action="close-modal">Cancelar</button>
-					</footer>
-				</div>
+				</form>
+
+				<footer class="modal-footer">
+					<button class="button" type="button" data-action="close-modal">Cancelar</button>
+
+					<button
+						class="button is-primary"
+						type="submit"
+						form="dynamic-form"  // <-- ¡LA MAGIA DE HTML5!
+						data-action="submit-form"
+					>
+						Guardar
+					</button>
+				</footer>
 			</div>
 		`;
-
 		modalContainer.innerHTML = formHtml;
 		this.addEventListeners();
 	},
 
-	/**
-	 * Construye los campos del formulario a partir del esquema de columnas.
-	 * @param {object} columnsSchema - El objeto con la configuración de todas las columnas.
-	 * @param {object|null} recordData - Los datos para rellenar los campos.
-	 * @returns {string} - El HTML de los campos del formulario.
-	 */
 	buildFormFields: function(columnsSchema, recordData) {
 		let fieldsHtml = '';
 		for (const columnName in columnsSchema) {
 			const column = columnsSchema[columnName];
+			const isEditing = recordData !== null;
 
-			// No mostrar campos que no son editables o están marcados como no visibles en el formulario
-			if (column.isEditable === false || column.showInEditForm === false) {
-				continue;
-			}
+			// Determina si el campo debe mostrarse en el formulario actual (Crear o Editar).
+			const showInForm = isEditing ? column.showInEditForm !== false : column.showInCreateForm !== false;
+			if (!showInForm) continue;
 
 			const value = recordData ? (recordData[columnName] ?? '') : (column.defaultValue ?? '');
 			const label = column.title || columnName;
-			const placeholder = column.placeholder || '';
 			const isRequired = column.validation?.required ? 'required' : '';
 
-			// Aquí se podría tener un switch más complejo para diferentes tipos de input
-			// (SELECT, TEXTAREA, CHECKBOX, etc.) basado en column.archetype
-			fieldsHtml += `
-				<div class="field">
-					<label class="label">${label}</label>
-					<div class="control">
-						<input
-							class="input"
-							type="text"
-							name="${columnName}"
-							value="${value}"
-							placeholder="${placeholder}"
-							${isRequired}
-						>
-					</div>
-				</div>
-			`;
+			// --- ¡NUEVO! MOTOR DE RENDERIZADO DE CAMPOS ---
+			fieldsHtml += `<div class="field"><label class="label">${label}</label><div class="control">`;
+
+			switch (column.inputType) {
+				case 'textarea':
+					fieldsHtml += `
+						<textarea class="textarea" name="${columnName}" ${isRequired}>${value}</textarea>
+					`;
+					break;
+
+				case 'select':
+					// 1. Obtenemos la clave de la lista de opciones desde el esquema.
+					const sourceKey = column.optionsSource?.sourceKey;
+					// 2. Buscamos esa lista en nuestro cache global de opciones.
+					const optionsList = _APP.optionsCache?.[sourceKey] || [];
+
+					fieldsHtml += `<div class="select is-fullwidth"><select name="${columnName}" ${isRequired}>`;
+					fieldsHtml += `<option value="">-- Seleccionar --</option>`; // Opción por defecto
+
+					optionsList.forEach(option => {
+						// 3. Comprobamos si esta opción debe estar pre-seleccionada.
+						const isSelected = option.value == value ? 'selected' : '';
+						fieldsHtml += `<option value="${option.value}" ${isSelected}>${option.label}</option>`;
+					});
+
+					fieldsHtml += `</select></div>`;
+					break;
+
+				default: // 'text', 'number', 'email', 'password', etc.
+					fieldsHtml += `
+						<input class="input" type="${column.inputType || 'text'}" name="${columnName}" value="${value}" ${isRequired}>
+					`;
+			}
+
+			fieldsHtml += `</div></div>`;
 		}
 		return fieldsHtml;
 	},
 
+	getFormData: function() {
+		const form = modalContainer.querySelector('#dynamic-form');
+		if (!form) return null;
+		const formData = new FormData(form);
+		const data = {};
+		for (const [key, value] of formData.entries()) { data[key] = value; }
+		return data;
+	},
+
 	close: function() {
 		if (modalContainer) {
+			// Quitamos TU clase 'modal-open' del BODY para desbloquear el scroll.
+			document.body.classList.remove('modal-open');
+			modalContainer.classList.add('modal-hidden');
 			modalContainer.innerHTML = '';
 		}
 	},
 
-	handleModalClick: function(event) {
-		const action = event.target.closest('[data-action]')?.dataset.action;
-		if (action === 'close-modal') {
-			this.close();
-		}
-		if (action === 'submit-form') {
-			// Lógica para recolectar y enviar el formulario (que podría vivir en app.js)
-			alert('Formulario enviado (lógica pendiente)');
-			this.close();
-		}
-	},
-
 	addEventListeners: function() {
-		// Asegurarse de que el listener se añade al contenedor del modal
-		const activeModal = modalContainer.querySelector('.modal');
-		if (activeModal) {
-			activeModal.addEventListener('click', this.handleModalClick.bind(this));
+		const form = modalContainer.querySelector('#dynamic-form');
+
+		// El listener ahora se añade al contenedor principal para capturar los clics de cierre.
+		if (modalContainer) {
+			modalContainer.addEventListener('click', (event) => {
+				if (event.target.closest('[data-action="close-modal"]')) {
+					this.close();
+				}
+			});
+		}
+
+		if (form) {
+			form.addEventListener('submit', (event) => {
+				event.preventDefault();
+				if (typeof _onSubmitCallback === 'function') {
+					const data = this.getFormData();
+					_onSubmitCallback(data);
+				}
+			});
 		}
 	}
 };

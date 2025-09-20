@@ -186,12 +186,39 @@ async function handleAppClick(event) {
 			}
 			break;
 		case 'open-create-form':
-			if (tableSchema) modal.openForm(tableSchema, null);
+			if (tableSchema) {
+				// 1. Definimos la función que se ejecutará al guardar.
+				const createSubmitCallback = async (formData) => {
+					try {
+						const newRecord = await apiClient.createRecord(tableName, formData);
+						console.log('Registro creado con éxito:', newRecord);
+						modal.close();
+						handleRouteChange(); // Recargar la tabla para ver el nuevo registro.
+					} catch (error) {
+						alert(`Error al crear el registro: ${error.message}`);
+					}
+				};
+				// 2. Abrimos el modal, pasándole la función.
+				modal.openForm(tableSchema, null, createSubmitCallback);
+			}
 			break;
 		case 'open-edit-form':
 			if (tableSchema && id) {
 				const recordData = AppState.currentView.data.find(item => item.id == id);
-				modal.openForm(tableSchema, recordData);
+
+				// 1. Definimos la función para la edición.
+				const editSubmitCallback = async (formData) => {
+					try {
+						await apiClient.updateRecord(tableName, id, formData);
+						console.log('Registro actualizado con éxito');
+						modal.close();
+						handleRouteChange(); // Recargar la tabla.
+					} catch (error) {
+						alert(`Error al actualizar el registro: ${error.message}`);
+					}
+				};
+				// 2. Abrimos el modal con los datos y la función.
+				modal.openForm(tableSchema, recordData, editSubmitCallback);
 			}
 			break;
 		case 'trigger-delete':
