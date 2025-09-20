@@ -23,25 +23,31 @@ export const renderer = {
 		appContainer.innerHTML = titleHtml + contentHtml;
 	},
 
+
 	renderUserNav: function(session) {
 		if (!userNavContainer) return;
 
+		const isLoggedIn = session?.isLoggedIn;
+		const userNick = session?.userNick;
+
 		let userNavHtml = `
-			<button class="button is-primary" data-action="show-login">
+			<button class="button" data-action="show-login">
 				<strong>Iniciar Sesión</strong>
 			</button>
 		`;
-		if (session.isLoggedIn) {
+
+		if (isLoggedIn) {
+			// ESTA ES LA ESTRUCTURA CORRECTA Y DEFINITIVA
 			userNavHtml = `
 				<div class="navbar-item has-dropdown is-hoverable">
 					<a class="navbar-link">
 						<span class="icon"><i class="fas fa-user"></i></span>
-						<span>${session.user.nick}</span>
+						<span>${userNick}</span>
 					</a>
 					<div class="navbar-dropdown is-right">
-						<a class="navbar-item" data-action="logout">
+						<button id="logout-button" data-action="logout">
 							Cerrar Sesión
-						</a>
+						</button>
 					</div>
 				</div>
 			`;
@@ -49,26 +55,44 @@ export const renderer = {
 		userNavContainer.innerHTML = userNavHtml;
 	},
 
-	renderNavigation: function(appSchema, session) {
+	renderNavigation: function(appConfig) {
 		if (!navigationContainer) return;
 
+		// 1. Empezamos con los menús estáticos que siempre están visibles.
 		let navHtml = `
 			<a href="#/app/inicio" class="nav-link">Inicio</a>
 			<a href="#/app/contactos" class="nav-link">Contactos</a>
 		`;
 
-		if (session.isLoggedIn && appSchema) {
-			for (const tableName in appSchema) {
-				const tableSchema = appSchema[tableName];
-				const tableComment = tableSchema.tableComment || {};
+		// 2. Verificamos si el usuario está logueado Y si la estructura del menú existe.
+		//    Usamos "optional chaining" (?.) para máxima seguridad.
+		if (appConfig?.session?.isLoggedIn && appConfig?.menu) {
 
-				if (tableComment.archetype === 'ENTIDAD_PRINCIPAL') {
-					const label = tableComment.labelPlural || tableName;
-					const route = `#/app/${tableName}`;
+			// 3. Iteramos sobre el array 'menu' que nos ha preparado el backend. ¡YA NO ADIVINAMOS!
+			appConfig.menu.forEach(item => {
+
+				// Lógica para renderizar un menú desplegable (submenu).
+				if (item.submenu) {
+					navHtml += `<div class="nav-item dropdown">`; // Usamos div para nav-items
+					navHtml += `  <a href="#" class="nav-link dropdown-toggle">${item.label}</a>`;
+					navHtml += `  <div class="dropdown-content">`;
+					item.submenu.forEach(subItem => {
+						const route = `#/app/${subItem.table}`;
+						navHtml += `<a href="${route}" class="dropdown-item">${subItem.label}</a>`;
+					});
+					navHtml += `  </div>`;
+					navHtml += `</div>`;
+				}
+				// Lógica para renderizar un enlace simple.
+				else if (item.table) {
+					const label = item.label || item.table;
+					const route = `#/app/${item.table}`;
 					navHtml += `<a href="${route}" class="nav-link">${label}</a>`;
 				}
-			}
+				// Aquí se podría añadir lógica para otros tipos de item.action si los hubiera.
+			});
 		}
+
 		navigationContainer.innerHTML = navHtml;
 	},
 
@@ -100,14 +124,13 @@ export const renderer = {
 	},
 
 	renderTable: function(tableSchema, data) {
-		const tableComment = tableSchema.tableComment || {};
 		const columns = tableSchema.columns || {};
+		const tableTitle = tableSchema.labelPlural || tableSchema.tableName || 'Registros';
 
 		let headerHtml = `
 			<div class="table-header">
 				<button class="button is-primary" data-action="open-create-form">
-					<span class="icon"><i class="fas fa-plus"></i></span>
-					<span>${tableComment.actions?.table[0]?.label || 'Nuevo'}</span>
+					<span>Nuevo</span>
 				</button>
 			</div>
 		`;
@@ -115,35 +138,61 @@ export const renderer = {
 		let tableHtml = '<table class="table is-fullwidth is-striped is-hoverable"><thead><tr>';
 		for (const columnName in columns) {
 			const columnSchema = columns[columnName];
-			if (columnSchema.visible !== false) { tableHtml += `<th>${columnSchema.title || columnName}</th>`; }
+			if (columnSchema.visible !== false) {
+				tableHtml += `<th>${columnSchema.title || columnName}</th>`;
+			}
 		}
 		tableHtml += '<th>Acciones</th></tr></thead>';
 
 		tableHtml += '<tbody>';
-		if (data.length === 0) {
-			const columnCount = Object.keys(columns).filter(c => columns[c].visible !== false).length + 1;
+		if (!data || data.length === 0) {
+			const columnCount = Object.values(columns).filter(c => c.visible !== false).length + 1;
 			tableHtml += `<tr><td colspan="${columnCount}" class="has-text-centered">No hay datos para mostrar.</td></tr>`;
 		} else {
 			data.forEach(row => {
 				tableHtml += `<tr data-id="${row.id}">`;
 				for (const columnName in columns) {
 					const columnSchema = columns[columnName];
-					if (columnSchema.visible !== false) { tableHtml += `<td>${row[columnName] ?? ''}</td>`; }
+					if (columnSchema.visible !== false) {
+						tableHtml += `<td>${row[columnName] ?? ''}</td>`;
+					}
 				}
-				tableHtml += `
-					<td class="actions-cell">
-						<button class="button is-small is-info" data-action="open-edit-form" data-id="${row.id}"><span class="icon"><i class="fas fa-edit"></i></span></button>
-						<button class="button is-small is-danger" data-action="trigger-delete" data-id="${row.id}"><span class="icon"><i class="fas fa-trash"></i></span></button>
-					</td>
-				`;
+
+				// --- ¡NUEVA LÓGICA DE BOTONES ROBUSTA! ---
+				tableHtml += `<td class="actions-cell">`;
+				if (tableSchema.actions && tableSchema.actions.row) {
+					tableSchema.actions.row.forEach(action => {
+						// Usamos optional chaining (?.) y valores por defecto para evitar errores.
+						const actionName = action.action || '';
+						const buttonClass = actionName.includes('delete') ? 'is-danger' : 'is-info';
+						const iconClass = action.icon || 'fas fa-question-circle';
+
+						if (action.targetRoute) {
+							const route = action.targetRoute.replace('{primaryKey}', row.id);
+							tableHtml += `
+								<a href="${route}" class="button is-small ${buttonClass}" title="${action.label || ''}">
+									<span class="icon"><i class="${iconClass}"></i></span>
+								</a>
+							`;
+						} else if (action.action) {
+							tableHtml += `
+								<button class="button is-small ${buttonClass}" data-action="${actionName}" data-id="${row.id}" title="${action.label || ''}">
+									<span class="icon"><i class="${iconClass}"></i></span>
+								</button>
+							`;
+						}
+					});
+				}
+				tableHtml += `</td>`;
+
 				tableHtml += '</tr>';
 			});
 		}
 		tableHtml += '</tbody></table>';
 
-		const tableTitle = tableComment.labelPlural || tableSchema.tableName;
 		this.renderView(tableTitle, headerHtml + tableHtml);
 	},
+
 
 	renderDashboard: function(title, subtitle) {
 		this.renderView(title, `<p>${subtitle}</p>`);

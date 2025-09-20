@@ -1,177 +1,211 @@
-// Indentación con TABS
-// public/js/app.js
+// public/js/app.js (indentación con TABS)
 
 import { apiClient } from './api/client.js';
 import { renderer } from './ui/renderer.js';
 import { modal } from './ui/modal.js';
 
-const state = {
-	session: {
-		isLoggedIn: false,
-		user: null,
-	},
-	schema: null,
+// Objeto global para almacenar el estado de la aplicación.
+const AppState = {
+	config: null, // Almacenará la configuración completa (menú, tablas, sesión)
 	currentView: {
 		tableName: null,
 		data: [],
 	},
 };
 
-async function init() {
+/**
+ * Punto de entrada principal. Se ejecuta una vez que el DOM está cargado.
+ */
+async function main() {
 	console.log('Inicializando la aplicación...');
-	document.body.addEventListener('click', handleAppClick);
-
-	const cachedSchema = localStorage.getItem('application_schema');
-	if (cachedSchema) {
-		state.schema = JSON.parse(cachedSchema);
-	}
 
 	try {
+		// --- CAMBIO --- El flujo ahora es secuencial y robusto.
+
+		// 1. Intentamos cargar la configuración desde el caché para una carga inicial rápida.
+		const cachedConfig = localStorage.getItem('app_config');
+		if (cachedConfig) {
+			try { AppState.config = JSON.parse(cachedConfig); } catch (e) { localStorage.removeItem('app_config'); }
+		}
+
+		// 2. Verificamos el estado de la sesión REAL con el servidor.
 		const sessionStatus = await apiClient.checkStatus();
-		state.session.isLoggedIn = sessionStatus.loggedIn;
-		state.session.user = sessionStatus.user;
 
-		// 1. Renderizar SIEMPRE la cáscara de la UI (botones y menús)
-		renderer.renderUserNav(state.session);
-		renderer.renderNavigation(state.schema, state.session);
-
-		// 2. Si el usuario está logueado, sincronizamos en segundo plano
-		if (state.session.isLoggedIn) {
-			// Usamos .then() para no bloquear la carga inicial de la vista
-			syncApplication().catch(err => console.error("Sincronización en segundo plano falló:", err));
-		}
-
-		// 3. Configurar el router y cargar la vista inicial
-		setupRouter();
-
-		// CORREGIDO: La lógica de la ruta por defecto ahora es más simple
-		if (!window.location.hash || window.location.hash === '#') {
-			// Si no hay ruta, SIEMPRE vamos a 'inicio'
-			window.location.hash = '/app/inicio';
+		// 3. Basado en el estado, decidimos si necesitamos cargar la configuración completa.
+		if (sessionStatus.loggedIn) {
+			// Si el usuario está logueado, nos aseguramos de tener la configuración más fresca.
+			await loadAppConfig();
 		} else {
-			// Si ya hay una ruta, la renderizamos
-			handleRouteChange();
+			// Si no está logueado, nos aseguramos de que no haya datos de sesión antiguos.
+			AppState.config = null;
+			localStorage.removeItem('app_config');
 		}
+
+		// 4. AHORA, y solo ahora que estamos seguros de tener los datos (o no tenerlos),
+		//    construimos la interfaz y el router.
+		setupUI();
+		setupRouter();
+		handleRouteChange(); // Renderizar la ruta actual.
 
 	} catch (error) {
 		console.error("Error crítico de inicialización:", error);
+		// El renderer ahora mostrará el mensaje de error que ves en la pantalla.
 		renderer.renderError("No se pudo conectar con el servidor.");
 	}
 }
 
-async function syncApplication() {
+/**
+ * Carga la configuración de la aplicación desde el servidor y la guarda.
+ */
+async function loadAppConfig() {
 	try {
-		const appSchema = await apiClient.syncApplicationSchema();
-		state.schema = appSchema;
-		localStorage.setItem('application_schema', JSON.stringify(appSchema));
-		// Volvemos a renderizar la navegación para añadir los menús dinámicos
-		renderer.renderNavigation(state.schema, state.session);
+		const appConfig = await apiClient.getAppConfig();
+		AppState.config = appConfig;
+		localStorage.setItem('app_config', JSON.stringify(appConfig));
+		console.log("Configuración fresca del servidor cargada y guardada.");
 	} catch (error) {
-		console.error("No se pudo sincronizar el esquema:", error);
-		// No mostramos un error en la UI, ya que es un proceso de fondo
+		console.error("No se pudo sincronizar la configuración:", error);
+		// En este caso, la app podría seguir funcionando con la versión en caché.
 	}
+}
+
+/**
+ * Configura los elementos estáticos de la UI y los manejadores de eventos.
+ */
+function setupUI() {
+	document.body.addEventListener('click', handleAppClick);
+	renderer.renderUserNav(AppState.config?.session); // Renderiza el menú de usuario.
+	renderer.renderNavigation(AppState.config); // Renderiza el menú principal.
 }
 
 function setupRouter() {
 	window.addEventListener('hashchange', handleRouteChange);
 }
 
+/**
+ * Maneja el cambio de ruta (navegación).
+ */
 async function handleRouteChange() {
-	const hash = window.location.hash.slice(1);
-	const path = hash.split('/')[2];
+	const hash = window.location.hash.slice(1) || '/app/inicio';
+	const pathParts = hash.split('/');
+	const view = pathParts[2] || 'inicio';
 
-	switch(path) {
+	// --- LÓGICA DE RUTAS PÚBLICAS Y PROTEGIDAS ---
+
+	// 1. Definimos qué vistas son públicas.
+	const publicViews = ['inicio', 'contactos', 'login'];
+	const isViewPublic = publicViews.includes(view);
+
+	// 2. Comprobamos si el usuario está intentando acceder a una ruta protegida sin haber iniciado sesión.
+	if (!AppState.config?.session?.userId && !isViewPublic) {
+		console.log(`Acceso denegado a la ruta protegida '/${view}'. Redirigiendo a login.`);
+		// Si es así, lo enviamos al login.
+		window.location.hash = '/app/login';
+		return;
+	}
+
+	// 3. Si llegamos aquí, el usuario tiene permiso para ver la página solicitada. Procedemos a renderizar.
+	switch(view) {
 		case 'login':
-			renderer.renderLogin(); // Esto ahora llama a renderView internamente
+			// Si ya está logueado y va a 'login', lo mandamos al inicio para que no vea el formulario.
+			if (AppState.config?.session?.userId) {
+				window.location.hash = '/app/inicio';
+				return;
+			}
+			renderer.renderLogin();
 			break;
 		case 'inicio':
-			const welcomeTitle = state.session.isLoggedIn ? `¡Bienvenido, ${state.session.user.nick}!` : '¡Bienvenido a Vitrales v2!';
+			const welcomeTitle = AppState.config?.session?.userNick ? `¡Bienvenido, ${AppState.config.session.userNick}!` : 'Bienvenido a Vitrales v2';
 			renderer.renderDashboard(welcomeTitle, 'Este es el panel principal.');
 			break;
 		case 'contactos':
-			renderer.renderDashboard('Información de Contacto', 'Aquí irá la información de contacto de la empresa.');
+			renderer.renderDashboard('Información de Contacto', 'Aquí irá la info de contacto.');
 			break;
 		default:
-			const tableName = path;
-			if (!state.session.isLoggedIn) {
-				window.location.hash = '#/app/login';
-				return;
-			}
+			// Si la vista no es pública, es una tabla.
+			const tableName = view;
+			const tableSchema = AppState.config?.tables?.[tableName];
 
-			if (state.schema && state.schema[tableName]) {
-				const tableSchema = state.schema[tableName];
-				state.currentView.tableName = tableName;
+			if (tableSchema) {
+				AppState.currentView.tableName = tableName;
 				try {
 					const data = await apiClient.getData(tableName);
-					state.currentView.data = data;
-					// Llamada simplificada
+
+					console.log(`Datos recibidos para la tabla '${tableName}':`, data);
+
+					AppState.currentView.data = data;
 					renderer.renderTable(tableSchema, data);
 				} catch(error) {
 					renderer.renderError(`No se pudieron cargar los datos para ${tableName}.`);
 				}
 			} else {
-				renderer.renderError(`La sección "${tableName}" no es válida o aún no ha sido cargada.`);
+				// Si la tabla no existe en el esquema, es una ruta no válida.
+				renderer.renderError(`La sección "${tableName}" no es válida.`);
 			}
 			break;
 	}
 }
 
+/**
+ * Manejador de eventos global para todas las acciones de la aplicación.
+ */
 async function handleAppClick(event) {
-	const action = event.target.closest('[data-action]')?.dataset.action;
-	if (!action) return;
+	const actionElement = event.target.closest('[data-action]');
+	if (!actionElement) return;
 
-	const id = event.target.closest('[data-id]')?.dataset.id;
-	const tableName = state.currentView.tableName;
-	const tableSchema = state.schema ? state.schema[tableName] : null;
+	const action = actionElement.dataset.action;
+	const id = actionElement.dataset.id;
+	const tableName = AppState.currentView.tableName;
+	const tableSchema = AppState.config?.tables?.[tableName];
 
 	switch (action) {
+		// --- ¡ESTE ES EL BLOQUE QUE FALTABA! ---
 		case 'show-login':
-			window.location.hash = '#/app/login';
+			window.location.hash = '/app/login';
 			break;
+		// -----------------------------------------
 		case 'logout':
 			await apiClient.logout();
+			localStorage.removeItem('app_config');
 			window.location.reload();
 			break;
 		case 'submit-login':
 			event.preventDefault();
 			const form = document.getElementById('login-form');
 			const errorContainer = document.getElementById('login-error');
-			const nick = form.elements['nick'].value;
-			const password = form.elements['password'].value;
-			if (!nick || !password) {
-				errorContainer.textContent = 'Por favor, ingrese usuario y contraseña.';
-				errorContainer.classList.remove('is-hidden');
-				return;
-			}
 			try {
-				await apiClient.login({ nick, password });
-				window.location.reload();
+				const credentials = {
+					nick: form.elements['nick'].value,
+					password: form.elements['password'].value
+				};
+				await apiClient.login(credentials);
+				window.location.reload(); // Recargamos para que se inicialice todo.
 			} catch (error) {
-				errorContainer.textContent = 'Credenciales incorrectas. Por favor, intente de nuevo.';
+				errorContainer.textContent = error.message || 'Credenciales incorrectas.';
 				errorContainer.classList.remove('is-hidden');
 			}
 			break;
 		case 'open-create-form':
-			if (tableSchema) {
-				modal.openForm(tableSchema, null);
-			}
+			if (tableSchema) modal.openForm(tableSchema, null);
 			break;
 		case 'open-edit-form':
 			if (tableSchema && id) {
-				const recordData = state.currentView.data.find(item => item.id == id);
+				const recordData = AppState.currentView.data.find(item => item.id == id);
 				modal.openForm(tableSchema, recordData);
 			}
 			break;
 		case 'trigger-delete':
-			if (tableName && id) {
-				if (confirm('¿Está seguro de que desea eliminar este registro?')) {
-					apiClient.deleteRecord(tableName, id)
-						.then(() => handleRouteChange())
-						.catch(err => alert(`Error al eliminar: ${err.message}`));
+			if (tableName && id && confirm('¿Está seguro?')) {
+				try {
+					await apiClient.deleteRecord(tableName, id);
+					handleRouteChange(); // Recargar la vista de la tabla.
+				} catch (err) {
+					alert(`Error al eliminar: ${err.message}`);
 				}
 			}
 			break;
 	}
 }
 
-document.addEventListener('DOMContentLoaded', init);
+// Iniciar la aplicación.
+document.addEventListener('DOMContentLoaded', main);

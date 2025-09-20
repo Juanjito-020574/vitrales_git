@@ -13,12 +13,14 @@ const API_BASE_URL = 'api.php'; // URL base de nuestra API
  * @returns {Promise<any>} - La respuesta de la API en formato JSON.
  */
 async function performRequest(action, params = {}, method = 'GET', body = null) {
-	const url = new URL(API_BASE_URL, window.location.origin);
+	// 1. Construimos la URL con los parámetros.
+	const url = new URL('api.php', window.location.origin);
 	url.searchParams.set('action', action);
 	for (const key in params) {
 		url.searchParams.set(key, params[key]);
 	}
 
+	// 2. Configuramos las opciones básicas del 'fetch'.
 	const options = {
 		method: method,
 		headers: {
@@ -27,13 +29,16 @@ async function performRequest(action, params = {}, method = 'GET', body = null) 
 		},
 	};
 
-	if (body) {
+	// --- ¡ESTA ES LA CORRECCIÓN CLAVE! ---
+	// 3. Solo añadimos un 'body' si el método NO es GET y si hay un cuerpo que enviar.
+	if (method !== 'GET' && body) {
 		options.body = JSON.stringify(body);
 	}
 
 	try {
 		const response = await fetch(url, options);
 
+		// Ahora, el 'response.ok' debería ser true.
 		if (!response.ok) {
 			const errorData = await response.json().catch(() => ({ error: 'Error de red o respuesta no válida.' }));
 			throw new Error(errorData.error || `Error ${response.status}: ${response.statusText}`);
@@ -43,7 +48,6 @@ async function performRequest(action, params = {}, method = 'GET', body = null) 
 
 	} catch (error) {
 		console.error(`Error en la llamada a la API [${action}]:`, error);
-		// Relanzamos el error para que el llamador pueda manejarlo.
 		throw error;
 	}
 }
@@ -54,11 +58,13 @@ export const apiClient = {
 	// --- MÉTODOS DE ESQUEMA Y NAVEGACIÓN (NUEVA ARQUITECTURA) ---
 
 	/**
-	 * Descarga el esquema completo, hidratado y procesado de la aplicación.
-	 * Esta es la llamada principal al iniciar la aplicación.
+	 * Descarga la configuración completa de la aplicación, incluyendo
+	 * el menú, el esquema de tablas hidratado y los datos de sesión.
+	 * Esta es la llamada principal que se hace después de iniciar sesión.
 	 */
-	syncApplicationSchema: function() {
-		return performRequest('get_hydrated_schema');
+	getAppConfig: function() {
+		// --- CAMBIO --- Apunta al nuevo endpoint 'get_app_config' de nuestra API.
+		return performRequest('get_app_config');
 	},
 
 	// --- MÉTODOS DE SESIÓN ---

@@ -69,6 +69,7 @@ nav#main-nav {
 	display: flex;
 	justify-content: center;
 	box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+	flex-wrap: wrap;
 }
 
 nav#main-nav a {
@@ -92,6 +93,7 @@ nav#main-nav a.active {
 	display: flex;
 	align-items: center;
 	gap: 15px;
+	text-align: center;
 }
 
 #user-info span {

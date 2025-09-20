@@ -21,15 +21,15 @@ class ApiDataBase {
 	}
 
 	/**
-	 * Ejecuta una consulta SELECT y devuelve un array de resultados.
+	 * Ejecuta una consulta SELECT y devuelve los resultados.
 	 * @param string $sql La sentencia SQL con '?' como placeholders.
 	 * @param array $params Los parámetros para la sentencia preparada.
-	 * @return array Los resultados como un array asociativo.
+	 * @param string $returnType El tipo de retorno: 'all' para todos los resultados, 'single' para el primero.
+	 * @return array|null Un array de resultados, un solo resultado asociativo, o null si no se encuentra nada en modo 'single'.
 	 */
-	public function query(string $sql, array $params = []): array {
+	public function query(string $sql, array $params = [], string $returnType = 'all') {
 		$stmt = $this->connection->prepare($sql);
 		if ($params) {
-			// 's' es el tipo más seguro y genérico, mysqli lo convierte si es necesario.
 			$types = str_repeat('s', count($params));
 			$stmt->bind_param($types, ...$params);
 		}
@@ -37,6 +37,13 @@ class ApiDataBase {
 		$result = $stmt->get_result();
 		$data = $result->fetch_all(MYSQLI_ASSOC);
 		$stmt->close();
+
+		if ($returnType === 'single') {
+			// Devuelve el primer elemento del array, o null si el array está vacío.
+			return $data[0] ?? null;
+		}
+
+		// Por defecto, devuelve todos los resultados como antes.
 		return $data;
 	}
 
@@ -100,6 +107,13 @@ class ApiDataBase {
 	 */
 	public function verifyPassword(string $password, string $hashedPassword): bool {
 		return password_verify($password, $hashedPassword);
+	}
+
+	/**
+	 *NUEVA FUNCION, NO ENTIENDO PARA QUE FUNCIONA AUN
+	 */
+	public function getConnection(): mysqli {
+		return $this->connection;
 	}
 
 	// Cierra la conexión al destruir el objeto.
